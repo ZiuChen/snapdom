@@ -175,6 +175,10 @@ function isLikelyFontStylesheet(href, requiredFamilies) {
     const path = (u.pathname + u.search).toLowerCase()
     if (/\bfont(s)?\b/.test(path) || /\.woff2?(\b|$)/.test(path)) return true
 
+    // Check for common libraries that include web fonts (e.g., KaTeX for math rendering)
+    const FONT_LIBRARIES = ['katex', 'mathjax', 'mathml']
+    if (FONT_LIBRARIES.some(lib => path.includes(lib))) return true
+
     for (const fam of requiredFamilies) {
       const tokenA = fam.toLowerCase().replace(/\s+/g, '+')
       const tokenB = fam.toLowerCase().replace(/\s+/g, '-')
