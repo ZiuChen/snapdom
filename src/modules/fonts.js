@@ -70,9 +70,6 @@ const GENERIC_FAMILIES = new Set([
   'emoji', 'math', 'fangsong', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded'
 ])
 
-/** Common libraries that include web fonts (for cross-origin stylesheet detection) */
-const FONT_LIBRARIES = ['katex', 'mathjax', 'mathml']
-
 /**
  * Normalize a CSS font-family list to the first non-generic family.
  * E.g. `"Roboto", Arial, sans-serif` -> `Roboto`
@@ -160,8 +157,9 @@ function parseStretchSpec(spec) {
  * - Cross-origin: allow only well-known font hosts or URLs containing family hints.
  * @param {string} href
  * @param {Set<string>} requiredFamilies // plain names e.g. "Unbounded", "Mansalva"
+ * @param {Array<Function>} [customFilters=[]] // custom filters from plugins via beforeFontCollection hook
  */
-function isLikelyFontStylesheet(href, requiredFamilies) {
+function isLikelyFontStylesheet(href, requiredFamilies, customFilters = []) {
   if (!href) return false
   try {
     const u = new URL(href, location.href)
@@ -178,8 +176,12 @@ function isLikelyFontStylesheet(href, requiredFamilies) {
     const path = (u.pathname + u.search).toLowerCase()
     if (/\bfont(s)?\b/.test(path) || /\.woff2?(\b|$)/.test(path)) return true
 
-    // Check for common libraries that include web fonts (e.g., KaTeX for math rendering)
-    if (FONT_LIBRARIES.some(lib => path.includes(lib))) return true
+    // Check custom filters provided by plugins
+    if (customFilters && customFilters.length > 0) {
+      if (customFilters.some(filter => typeof filter === 'function' && filter(href, u))) {
+        return true
+      }
+    }
 
     for (const fam of requiredFamilies) {
       const tokenA = fam.toLowerCase().replace(/\s+/g, '+')
@@ -577,6 +579,7 @@ async function collectFacesFromSheet(sheet, baseHref, emitFace, ctx) {
  * @param {{families?:string[], domains?:string[], subsets?:string[]}} [options.exclude] // simple exclude
  * @param {Array<{family:string,src:string,weight?:string|number,style?:string,stretchPct?:number}>} [options.localFonts=[]]
  * @param {string}  [options.useProxy=""]
+ * @param {Object} [options.context] // context object for plugin hooks
  * @returns {Promise<string>} inlined @font-face CSS
  */
 export async function embedCustomFonts({
@@ -585,10 +588,29 @@ export async function embedCustomFonts({
   exclude = undefined,
   localFonts = [],
   useProxy = '',
+  context = null,
 } = {}) {
   // ---------- Normalize inputs ----------
   if (!(required instanceof Set)) required = new Set()
   if (!(usedCodepoints instanceof Set)) usedCodepoints = new Set()
+
+  // ---- Run beforeFontCollection hook to collect custom filters ----
+  let customFilters = []
+  if (context) {
+    try {
+      const { runAll } = await import('../core/plugins.js')
+      const results = await runAll('beforeFontCollection', context, { required, usedCodepoints, exclude })
+      // Collect fontStylesheetFilters from all plugin results
+      for (const result of results) {
+        if (result && Array.isArray(result.fontStylesheetFilters)) {
+          customFilters = customFilters.concat(result.fontStylesheetFilters)
+        }
+      }
+    } catch (e) {
+      // If runAll is not available or hook fails, continue without custom filters
+      console.warn('[snapDOM] beforeFontCollection hook failed:', e)
+    }
+  }
 
   // Build index: family -> [{w,s,st}]
   const requiredIndex = new Map()
@@ -726,7 +748,7 @@ function faceMatchesRequired(fam, styleSpec, weightSpec, stretchSpec) {
       try { sameOrigin = new URL(link.href, location.href).origin === location.origin } catch {}
 
       if (!sameOrigin) {
-        if (!isLikelyFontStylesheet(link.href, requiredFamilies)) continue
+        if (!isLikelyFontStylesheet(link.href, requiredFamilies, customFilters)) continue
       }
 
       if (sameOrigin) {

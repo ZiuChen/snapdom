@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
  * Test for issue #344: KaTeX font embedding with dynamically injected stylesheets
- * Validates that the isLikelyFontStylesheet function recognizes KaTeX CDN URLs
+ * Tests the beforeFontCollection plugin hook for custom font stylesheet filters
  */
 
 vi.mock('../src/utils/helpers', async () => {
@@ -64,6 +64,36 @@ function addLink(href) {
 const req = (...keys) => new Set(keys)
 const cps = (t) => new Set([...t].map(ch => ch.codePointAt(0)))
 
+/**
+ * Example plugin that adds support for KaTeX and other math library fonts
+ * via the beforeFontCollection hook
+ */
+function katexFontsPlugin(options = {}) {
+  const libraries = options.libraries || ['katex', 'mathjax', 'mathml']
+
+  return {
+    name: 'katex-fonts',
+
+    /**
+     * beforeFontCollection hook - allows adding custom font stylesheet filters
+     * @param {Object} _context - capture context
+     * @param {Object} _payload - { required, usedCodepoints, exclude }
+     * @returns {Object} - { fontStylesheetFilters: [...] }
+     */
+    beforeFontCollection(_context, _payload) {
+      return {
+        fontStylesheetFilters: [
+          // Filter function receives (href, urlObject)
+          (href, urlObj) => {
+            const path = (urlObj.pathname + urlObj.search).toLowerCase()
+            return libraries.some(lib => path.includes(lib))
+          }
+        ]
+      }
+    }
+  }
+}
+
 beforeEach(() => {
   if (typeof cache.reset === 'function') cache.reset()
   if (typeof cache.resetCache === 'function') cache.resetCache()
@@ -73,17 +103,23 @@ beforeEach(() => {
   document.querySelectorAll('style,link[rel="stylesheet"]').forEach(n => n.remove())
 })
 
-describe('embedCustomFonts - KaTeX CDN support (issue #344)', () => {
-  it('recognizes and processes KaTeX CSS from registry.npmmirror.com', async () => {
+describe('embedCustomFonts - KaTeX CDN support via plugin (issue #344)', () => {
+  it('recognizes and processes KaTeX CSS from registry.npmmirror.com using plugin', async () => {
     const href = 'https://registry.npmmirror.com/katex/0.16.25/files/dist/katex.min.css'
     addLink(href)
 
     const required = req('KaTeX_Main__400__normal__100')
     const usedCodepoints = cps('abc123')
 
+    // Create context with the plugin
+    const context = {
+      plugins: [katexFontsPlugin()]
+    }
+
     const result = await embedCustomFonts({
       required,
       usedCodepoints,
+      context
     })
 
     // Should have called snapFetch to fetch the stylesheet
@@ -97,16 +133,21 @@ describe('embedCustomFonts - KaTeX CDN support (issue #344)', () => {
     expect(result).toContain('KaTeX_Main')
   })
 
-  it('recognizes KaTeX CSS from unpkg.com', async () => {
+  it('recognizes KaTeX CSS from unpkg.com using plugin', async () => {
     const href = 'https://unpkg.com/katex@0.16.8/dist/katex.min.css'
     addLink(href)
 
     const required = req('KaTeX_Main__400__normal__100')
     const usedCodepoints = cps('abc123')
 
+    const context = {
+      plugins: [katexFontsPlugin()]
+    }
+
     const result = await embedCustomFonts({
       required,
       usedCodepoints,
+      context
     })
 
     expect(snapFetch).toHaveBeenCalledWith(
@@ -116,16 +157,21 @@ describe('embedCustomFonts - KaTeX CDN support (issue #344)', () => {
     expect(result).toContain('@font-face')
   })
 
-  it('recognizes KaTeX CSS from cdn.jsdelivr.net', async () => {
+  it('recognizes KaTeX CSS from cdn.jsdelivr.net using plugin', async () => {
     const href = 'https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css'
     addLink(href)
 
     const required = req('KaTeX_Main__400__normal__100')
     const usedCodepoints = cps('abc123')
 
+    const context = {
+      plugins: [katexFontsPlugin()]
+    }
+
     const result = await embedCustomFonts({
       required,
       usedCodepoints,
+      context
     })
 
     expect(snapFetch).toHaveBeenCalledWith(
@@ -135,7 +181,7 @@ describe('embedCustomFonts - KaTeX CDN support (issue #344)', () => {
     expect(result).toContain('@font-face')
   })
 
-  it('recognizes MathJax CSS from CDN', async () => {
+  it('recognizes MathJax CSS from CDN using plugin', async () => {
     const href = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2/mathjax.css'
     addLink(href)
 
@@ -155,9 +201,52 @@ describe('embedCustomFonts - KaTeX CDN support (issue #344)', () => {
     const required = req('MJX__400__normal__100')
     const usedCodepoints = cps('abc123')
 
+    const context = {
+      plugins: [katexFontsPlugin()]
+    }
+
     const result = await embedCustomFonts({
       required,
       usedCodepoints,
+      context
+    })
+
+    expect(snapFetch).toHaveBeenCalledWith(
+      href,
+      expect.objectContaining({ as: 'text' })
+    )
+    expect(result).toContain('@font-face')
+  })
+
+  it('plugin can be configured with custom library names', async () => {
+    const href = 'https://example.com/customlib/fonts.css'
+    addLink(href)
+
+    const required = req('CustomFont__400__normal__100')
+    const usedCodepoints = cps('abc123')
+
+    // Plugin configured to recognize 'customlib'
+    const context = {
+      plugins: [katexFontsPlugin({ libraries: ['customlib'] })]
+    }
+
+    vi.mocked(snapFetch).mockResolvedValueOnce({
+      ok: true,
+      data: `
+        @font-face {
+          font-family: 'CustomFont';
+          src: url(custom.woff2) format('woff2');
+        }
+      `,
+      status: 200,
+      url: href,
+      fromCache: false,
+    })
+
+    const result = await embedCustomFonts({
+      required,
+      usedCodepoints,
+      context
     })
 
     expect(snapFetch).toHaveBeenCalledWith(

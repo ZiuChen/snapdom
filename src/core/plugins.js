@@ -5,6 +5,7 @@
  *  - beforeSnap(context)
  *  - beforeClone(context)
  *  - afterClone(context)
+ *  - beforeFontCollection(context) - NEW: allows plugins to provide custom font stylesheet filters
  *  - beforeRender(context)
  *  - afterRender(context)
  *  - beforeExport(context, { format, options })
